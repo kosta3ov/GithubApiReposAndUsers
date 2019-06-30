@@ -9,12 +9,53 @@
 import Foundation
 import RxSwift
 
+enum Helpers {
+    static func createRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.addValue("token 051d6b91b3d2dc8e645cebe2c81d740b9d1a4ba6", forHTTPHeaderField: "Authorization")
+        return request
+    }
+    
+    static func getLink(from response: HTTPURLResponse) -> String? {
+        let linkKey = "Link"
+        
+        guard let link = response.allHeaderFields[linkKey] as? String else {
+            return nil
+        }
+        
+        return link
+    }
+    
+    static func getError(from response: HTTPURLResponse, data: Data) -> ClientError {
+        let messageKey = "message"
+        guard let json = try? JSONSerialization.jsonObject(with: data, options: []),
+            let jsonDict = json as? [String: Any],
+            let message = jsonDict[messageKey] as? String
+            else {
+                return .undefined
+        }
+        
+        switch response.statusCode {
+        case ClientError.badRequestCode:
+            return .badRequest(code: response.statusCode, message: message)
+        case ClientError.unprocessableEntityCode:
+            return .unprocessableEntity(code: response.statusCode, message: message)
+        case ClientError.forbiddenCode:
+            return .forbidden(code: response.statusCode, message: message)
+        default:
+            return .undefined
+        }
+    }
+}
+
 enum ClientError: Error {
     static let badRequestCode = 400
     static let unprocessableEntityCode = 422
+    static let forbiddenCode = 403
     
     case badRequest(code: Int, message: String)
     case unprocessableEntity(code: Int, message: String)
+    case forbidden(code: Int, message: String)
     case undefined
 }
 
@@ -67,53 +108,25 @@ struct FetchStatus {
 protocol GithubManagerProtocol {
     func fetchRepos(process: @escaping ([Repo]) -> Void)
     func fetchUsers(process: @escaping ([User]) -> Void)
+    func setErrorHandler(handler: @escaping (ClientError) -> Void)
 }
 
 
-final class GithubManager: GithubManagerProtocol {
-    private var userService = UserService()
-    private var repoService = RepoService()
+final class GithubManager<UserServiceType: FetchServiceProtocol, RepoServiceType: FetchServiceProtocol>: GithubManagerProtocol {
+    
+    private var userService: UserServiceType
+    private var repoService: RepoServiceType
     
     private var status = FetchStatus()
     
-    static func createRequest(url: URL) -> URLRequest {
-        var request = URLRequest(url: url)
-        request.addValue("token 051d6b91b3d2dc8e645cebe2c81d740b9d1a4ba6", forHTTPHeaderField: "Authorization")
-        return request
-    }
-    
-    static func getLink(from response: HTTPURLResponse) -> String? {
-        let linkKey = "Link"
-        
-        guard let link = response.allHeaderFields[linkKey] as? String else {
-            return nil
-        }
-        
-        return link
-    }
-    
-    static func getError(from response: HTTPURLResponse, data: Data) -> ClientError {
-        let messageKey = "message"
-        guard let json = try? JSONSerialization.jsonObject(with: data, options: []),
-            let jsonDict = json as? [String: Any],
-            let message = jsonDict[messageKey] as? String
-            else {
-                return .undefined
-        }
-        
-        switch response.statusCode {
-            case ClientError.badRequestCode:
-                return .badRequest(code: ClientError.badRequestCode, message: message)
-            case ClientError.unprocessableEntityCode:
-                return .unprocessableEntity(code: ClientError.unprocessableEntityCode, message: message)
-            default:
-                return .undefined
-        }
+    func setErrorHandler(handler: @escaping (ClientError) -> Void) {
+        self.repoService.onError = handler
+        self.userService.onError = handler
     }
     
     
     func fetchRepos(process: @escaping ([Repo]) -> Void) {
-        self.repoService.onCompletion = process
+        self.repoService.onCompletion = process as? (([RepoServiceType.Item]) -> Void)
         
         if case .ready = self.repoService.status {
             self.repoService.status = .loading
@@ -122,7 +135,7 @@ final class GithubManager: GithubManagerProtocol {
     }
     
     func fetchUsers(process: @escaping ([User]) -> Void) {
-        self.userService.onCompletion = process
+        self.userService.onCompletion = process as? (([UserServiceType.Item]) -> Void)
         if case .ready = self.userService.status {
             self.userService.status = .loading
             self.userService.getObjects(url: status.nextUsersURL)
@@ -130,15 +143,10 @@ final class GithubManager: GithubManagerProtocol {
     }
     
     
-    init() {
+    init(userService: UserServiceType, repoService: RepoServiceType) {
         
-        let errorHandler = { (clientErr: ClientError) in
-            
-        }
-        
-        self.userService.onError = errorHandler
-        self.repoService.onError = errorHandler
-        
+        self.userService = userService
+        self.repoService = repoService
         
         self.userService.onLink = { links in
             if let next = links[.next] {

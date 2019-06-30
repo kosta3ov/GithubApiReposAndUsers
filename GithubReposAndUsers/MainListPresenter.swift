@@ -42,11 +42,20 @@ struct UserViewData {
     }
 }
 
+protocol MainListViewProtocol: class {
+    func showErrorMessage(message: String)
+    var viewDataStorage: ViewDataStorageProtocol {get}
+    
+    var getNewUsersViewData: (([UserViewData]) -> Void)? { get set }
+    var getNewReposViewData: (([RepoViewData]) -> Void)? { get set }
+}
+
 
 protocol MainListPresenterProtocol {
     func attachView(view: MainListViewProtocol)
     func detachView()
-    func fetchNext(type: DataType)
+    func fetchNextRepositories(completion: @escaping ([RepoViewData]) -> Void)
+    func fetchNextUsers(completion: @escaping ([UserViewData]) -> Void)
 }
 
 
@@ -56,6 +65,20 @@ class MainListPresenter: MainListPresenterProtocol {
     
     init(manager: GithubManagerProtocol) {
         self.githubManager = manager
+        self.githubManager.setErrorHandler { (err) in
+            DispatchQueue.main.async {
+                switch err {
+                case .badRequest(let code, let message):
+                    self.mainListView?.showErrorMessage(message: "\(code) \(message)")
+                case .unprocessableEntity(let code, let message):
+                    self.mainListView?.showErrorMessage(message: "\(code) \(message)")
+                case .forbidden(let code, let message):
+                    self.mainListView?.showErrorMessage(message: "\(code) \(message)")
+                default:
+                    self.mainListView?.showErrorMessage(message: "undefined error")
+                }
+            }
+        }
     }
     
     func attachView(view: MainListViewProtocol) {
@@ -66,31 +89,22 @@ class MainListPresenter: MainListPresenterProtocol {
         self.mainListView = nil
     }
     
-    func fetchNext(type: DataType) {
-        switch type {
-        case .Repo:
-            self.fetchNextRepositories()
-        case .User:
-            self.fetchNextUsers()
-        }
-    }
     
-    private func fetchNextRepositories() {
+    func fetchNextRepositories(completion: @escaping ([RepoViewData]) -> Void) {
         self.githubManager.fetchRepos { (repos) in
             let reposViewData = repos.map { RepoViewData(repo:$0) }
-            
             DispatchQueue.main.async {
-                self.mainListView?.getNewRepos(reposViewData: reposViewData)
+                completion(reposViewData)
             }
         }
     }
     
-    private func fetchNextUsers() {
+    func fetchNextUsers(completion: @escaping ([UserViewData]) -> Void) {
         self.githubManager.fetchUsers { (users) in
-            let userViewData = users.map { UserViewData(user:$0) }
-            
+            let usersViewData = users.map { UserViewData(user:$0) }
+        
             DispatchQueue.main.async {
-                self.mainListView?.getNewUsers(usersViewData: userViewData)
+                completion(usersViewData)
             }
         }
     }

@@ -31,6 +31,7 @@ final class UserService: FetchServiceProtocol {
     static let baseURL = "https://api.github.com/users"
     
     var status: ServiceStatus = .ready
+    var session: URLSession = URLSession.shared
     
     var onCompletion: (([User]) -> Void)?
     var onError: ((ClientError) -> Void)?

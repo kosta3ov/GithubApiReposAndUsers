@@ -9,17 +9,16 @@
 import UIKit
 import Kingfisher
 
-protocol MainListViewProtocol: class {
-    func getNewRepos(reposViewData: [RepoViewData])
-    func getNewUsers(usersViewData: [UserViewData])
-}
-
-
 class MainListViewController: UITableViewController, MainListViewProtocol {
-    var presenter: MainListPresenterProtocol = MainListPresenter(manager: GithubManager())
+    var viewDataStorage: ViewDataStorageProtocol = MainListViewDataStorage()
     
-    private var repositoriesViewData = [RepoViewData]()
-    private var usersViewData = [UserViewData]()
+    var presenter: MainListPresenterProtocol = {
+        let manager = GithubManager(userService: UserService(), repoService: RepoService())
+        return MainListPresenter(manager: manager)
+    }()
+    
+    var getNewUsersViewData: (([UserViewData]) -> Void)?
+    var getNewReposViewData: (([RepoViewData]) -> Void)?
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -29,20 +28,28 @@ class MainListViewController: UITableViewController, MainListViewProtocol {
         
         self.presenter.attachView(view: self)
         
-        self.presenter.fetchNext(type: .Repo)
-        self.presenter.fetchNext(type: .User)
+        self.getNewReposViewData = { [weak self] (reposViewData) in
+            self?.viewDataStorage.addNewRepos(reposViewData: reposViewData)
+            ///TODO: increase perfomance - reload only needed cells
+            self?.tableView.reloadData()
+        }
+        
+        self.getNewUsersViewData = { [weak self] (usersViewData) in
+            self?.viewDataStorage.addNewUsers(usersViewData: usersViewData)
+            ///TODO: increase perfomance - reload only needed cells
+            self?.tableView.reloadData()
+        }
+        
+        self.presenter.fetchNextRepositories(completion: self.getNewReposViewData!)
+        self.presenter.fetchNextUsers(completion: self.getNewUsersViewData!)
+        
     }
     
-    func getNewRepos(reposViewData: [RepoViewData]) {
-        self.repositoriesViewData += reposViewData
-        ///TODO: increase perfomance - reload only needed cells
-        self.tableView.reloadData()
-    }
-    
-    func getNewUsers(usersViewData: [UserViewData]) {
-        self.usersViewData += usersViewData
-        ///TODO: increase perfomance - reload only needed cells
-        self.tableView.reloadData()
+    func showErrorMessage(message: String) {
+        let alert = UIAlertController.init(title: "Error has occured", message: message, preferredStyle: .alert)
+        let dismiss = UIAlertAction.init(title: "Cancel", style: .cancel, handler: nil)
+        alert.addAction(dismiss)
+        self.present(alert, animated: true)
     }
     
 }
@@ -55,12 +62,12 @@ extension MainListViewController {
     
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         let loadingCells = 50
-        return repositoriesViewData.count + usersViewData.count + loadingCells
+        return viewDataStorage.allViewDataCount + loadingCells
     }
     
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         
-        let loadedItemsCount = repositoriesViewData.count + usersViewData.count
+        let loadedItemsCount = viewDataStorage.allViewDataCount
         
         if (indexPath.row >= loadedItemsCount) {
             return loadingCell(in: tableView, for: indexPath)
@@ -71,13 +78,13 @@ extension MainListViewController {
         
         switch cellType {
         case DataType.Repo:
-            if index >= repositoriesViewData.count {
+            if index >= viewDataStorage.reposViewDataCount {
                 return loadingCell(in: tableView, for: indexPath)
             }
             return repoCell(in: tableView, for: indexPath)
             
         case DataType.User:
-            if index >= usersViewData.count {
+            if index >= viewDataStorage.usersViewDataCount {
                 return loadingCell(in: tableView, for: indexPath)
             }
             return userCell(in: tableView, for: indexPath)
@@ -93,7 +100,14 @@ extension MainListViewController: UITableViewDataSourcePrefetching {
         if loadingCellsIndexPaths.count > 0 {
             let loadingCellsTypes = Set(loadingCellsIndexPaths.map { DataType.init(rawValue: $0.row % 2)! })
             for type in loadingCellsTypes {
-                self.presenter.fetchNext(type: type)
+                switch type {
+                case .Repo:
+                    self.presenter.fetchNextRepositories(completion: self.getNewReposViewData!)
+                case .User:
+                    self.presenter.fetchNextUsers(completion: self.getNewUsersViewData!)
+                }
+                
+                
             }
         }
     }
@@ -110,14 +124,14 @@ private extension MainListViewController {
     private func userCell(in tableView: UITableView, for indexPath: IndexPath) -> UserCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: CellIdentifiers.UserCell.rawValue, for: indexPath) as! UserCell
         let index = indexPath.row / 2
-        cell.configure(viewData: usersViewData[index])
+        cell.configure(viewData: viewDataStorage.getUserViewData(index: index))
         return cell
     }
     
     private func repoCell(in tableView: UITableView, for indexPath: IndexPath) -> RepoCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: CellIdentifiers.RepoCell.rawValue, for: indexPath) as! RepoCell
         let index = indexPath.row / 2
-        cell.configure(viewData: repositoriesViewData[index])
+        cell.configure(viewData: viewDataStorage.getRepoViewData(index: index))
         return cell
     }
     
@@ -125,14 +139,14 @@ private extension MainListViewController {
         let index = indexPath.row / 2
         let cellType = DataType.init(rawValue: indexPath.row % 2)!
         
-        if cellType == .Repo && index >= repositoriesViewData.count {
+        if cellType == .Repo && index >= viewDataStorage.reposViewDataCount {
             return true
         }
-        else if cellType == .User && index >= usersViewData.count {
+        else if cellType == .User && index >= viewDataStorage.usersViewDataCount {
             return true
         }
         else {
-            return indexPath.row >= repositoriesViewData.count + usersViewData.count
+            return indexPath.row >= viewDataStorage.allViewDataCount
         }
     }
 }

@@ -21,12 +21,15 @@ protocol FetchServiceProtocol: class {
     
     var status: ServiceStatus {get set}
     
+    var session: URLSession {get}
+    
     var onCompletion: (([Item]) -> Void)? {get set}
     var onError: ((ClientError) -> Void)? {get set}
     var onLink: (([LinkHeader:String]) -> Void)? {get set}
 }
 
 extension FetchServiceProtocol {
+    
     private func getObject(from data: Data) -> Item? {
         let decoder = JSONDecoder()
         let obj = try? decoder.decode(Item.self, from: data)
@@ -49,14 +52,20 @@ extension FetchServiceProtocol {
         let response = Observable
             .of(url)
             .map { URL(string: $0)! }
-            .map { GithubManager.createRequest(url: $0) }
-            .flatMap { URLSession.shared.rx.response(request: $0) }
+            .map { Helpers.createRequest(url: $0) }
+            .flatMap { self.session.rx.response(request: $0) }
             .flatMap { [weak self] response, data -> Observable<String> in
+                if 400 ..< 500 ~= response.statusCode {
+                    let err = Helpers.getError(from: response, data: data)
+                    self?.onError?(err)
+                    return Observable.empty()
+                }
+                
                 guard let json = try? JSONSerialization.jsonObject(with: data, options: []) else {
                     return Observable.empty()
                 }
                 
-                if let link = GithubManager.getLink(from: response) {
+                if let link = Helpers.getLink(from: response) {
                     let links = LinkHeader.parseLinks(from: link)
                     self?.onLink?(links)
                 }
@@ -64,8 +73,8 @@ extension FetchServiceProtocol {
                 return self?.getObjectURL(from: json) ?? Observable.empty()
             }
             .map { URL(string: $0)! }
-            .map { GithubManager.createRequest(url: $0) }
-            .flatMap { URLSession.shared.rx.response(request: $0) }
+            .map { Helpers.createRequest(url: $0) }
+            .flatMap { self.session.rx.response(request: $0) }
             .share(replay: 1)
         
         /*
@@ -82,6 +91,8 @@ extension FetchServiceProtocol {
             .subscribe(onSuccess: { [weak self] (newObjects) in
                 self?.onCompletion?(newObjects)
                 self?.status = .ready
+            }, onError: { (err) in
+                print(err.localizedDescription)
             })
         
         
@@ -91,7 +102,7 @@ extension FetchServiceProtocol {
         _ = response
             .filter {response, _ in 400 ..< 500 ~= response.statusCode }
             .map { (response, data) -> ClientError in
-                GithubManager.getError(from: response, data: data)
+                Helpers.getError(from: response, data: data)
             }
             .subscribe(onNext: { [weak self] err in
                 self?.onError?(err)

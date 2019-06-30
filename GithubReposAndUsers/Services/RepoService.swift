@@ -30,6 +30,8 @@ final class RepoService: FetchServiceProtocol {
     
     static let baseURL = "https://api.github.com/repositories"
     
+    var session: URLSession = URLSession.shared
+    
     var status: ServiceStatus = .ready
 
     var onCompletion: (([Repo]) -> Void)?
